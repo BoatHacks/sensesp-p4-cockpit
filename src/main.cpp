@@ -33,6 +33,8 @@
 #include "sensesp_app_builder.h"
 #include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp/system/lambda_consumer.h"
+#include "sensesp_ble_gateway/ble_signalk_gateway.h"
+#include "sensesp_ble_gateway/esp_hosted_bluedroid_ble.h"
 
 #include "jlp/default_layout.h"
 #include "jlp/idle_dimmer.h"
@@ -64,6 +66,14 @@ using namespace sensesp_cockpit_display;
 // server is unreachable.
 static constexpr const char* kSkHost = "192.168.0.148";
 static constexpr uint16_t kSkPort = 4100;
+
+// BLE gateway prototype (see setup()). Kept alive for the app's
+// lifetime — BLESignalKGateway keeps a shared_ptr to the provisioner
+// too, so these could be setup()-local, but file-static makes them
+// reachable from a future status-overlay hook without threading them
+// through.
+static std::shared_ptr<EspHostedBluedroidBLE> g_ble;
+static std::shared_ptr<BLESignalKGateway> g_ble_gateway;
 
 void setup() {
   SetupLogging(ESP_LOG_INFO);
@@ -227,6 +237,28 @@ void setup() {
   jlp::http_api_start(8081);
   // Network is up now — safe to open the Wyoming satellite's TCP listener.
   wyoming_sat->start();
+
+  // BLE gateway prototype: bridges nearby BLE advertisements to
+  // signalk-server, sharing the onboard C6 companion with the WiFi
+  // brought up above via esp_hosted (WiFi/BT coexistence Kconfig has
+  // been in sdkconfig.defaults since early on; this is its first
+  // application-level use). Compiles and links against the same
+  // sdkconfig this firmware already ships — actual radio coexistence
+  // and the RAM impact under a live layout still need on-device
+  // verification.
+  //
+  // Control WS left off: this panel's internal RAM is already tight
+  // (see the CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP comment in
+  // sdkconfig.defaults — ~33 KB free after WS + a 36-path layout, already
+  // below the 40 KB watchdog line). A second always-on WebSocket is a
+  // real risk of tipping that over; advertisements still flow via HTTP
+  // POST with it disabled.
+  g_ble = std::make_shared<EspHostedBluedroidBLE>();
+  BLESignalKGatewayConfig ble_gw_cfg;
+  ble_gw_cfg.enable_control_ws = false;
+  g_ble_gateway = std::make_shared<BLESignalKGateway>(g_ble, app->get_ws_client(),
+                                                       ble_gw_cfg);
+  g_ble_gateway->start();
   jlp::mdns_announce_start(8081);
   jlp::zones().hook_sk_ws();
   jlp::notifications().hook_sk_ws();
