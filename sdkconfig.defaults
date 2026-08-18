@@ -71,7 +71,21 @@ CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 # More sockets so the SensESP web UI's parallel browser fetches
 # (6-10 concurrent connections) aren't refused by httpd's default
 # max_open_sockets=7 (only 4 usable after 3 reserved).
-CONFIG_LWIP_MAX_SOCKETS=16
+#
+# 16 wasn't enough in practice: a burst of parallel asset requests to
+# the SensESP admin UI (index.html pulling several JS/CSS chunks at
+# once) still hit `httpd_accept_conn: error in accept (23)` — errno 23
+# is ENFILE, lwIP's *global* socket table being exhausted, not that one
+# httpd instance's own cap (which SensESP already mitigates via
+# lru_purge_enable — see its http_server.h). This firmware runs several
+# concurrent listeners drawing from the same pool at once — JLP :8081,
+# OTA :8080, remote_log :2323, candump :2599, the SK WS client, mDNS,
+# SNTP, plus the SensESP admin UI itself — so a browser's connection
+# burst on top of all of that pushed total usage past 16. Raised to 24;
+# each lwIP socket slot is a small fixed-size struct (not the TCP
+# window buffers above, which are allocated per active connection, not
+# per the ceiling), so this costs little RAM for real headroom.
+CONFIG_LWIP_MAX_SOCKETS=24
 
 # Raise lwIP TCP/IP task priority so it drains SDIO RX faster than
 # application tasks can re-fill it. Catches "task still writing Rx data
